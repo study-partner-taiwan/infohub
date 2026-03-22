@@ -12,7 +12,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: '需要 source_id' }, { status: 400 });
     }
 
-    const source = getSourceById(source_id);
+    const source = await getSourceById(source_id);
     if (!source) {
       return NextResponse.json({ error: '找不到此來源' }, { status: 404 });
     }
@@ -26,7 +26,7 @@ export async function POST(request: NextRequest) {
       content_text: source.content_text || undefined,
     });
 
-    const classification = saveClassification({
+    const classification = await saveClassification({
       source_id,
       ...result,
     });

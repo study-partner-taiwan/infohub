@@ -14,16 +14,16 @@ export async function GET(request: NextRequest) {
     const action = searchParams.get('action');
 
     if (action === 'categories') {
-      const categories = getCategories();
+      const categories = await getCategories();
       return NextResponse.json({ categories });
     }
 
     if (action === 'stats') {
-      const stats = getStats();
+      const stats = await getStats();
       return NextResponse.json({ stats });
     }
 
-    const sources = getAllSources({ category, platform, limit, offset });
+    const sources = await getAllSources({ category, platform, limit, offset });
     return NextResponse.json({ sources });
   } catch (error) {
     console.error('GET /api/sources error:', error);
@@ -60,7 +60,7 @@ export async function POST(request: NextRequest) {
     const extracted = await extractFromUrl(targetUrl);
 
     // 儲存來源
-    const source = createSource({
+    const source = await createSource({
       type: extracted.type,
       platform: extracted.platform,
       title: inputTitle || extracted.title || undefined,
@@ -80,9 +80,9 @@ export async function POST(request: NextRequest) {
       author: source.author || undefined,
       platform: source.platform,
       content_text: source.content_text || undefined,
-    }).then(classification => {
+    }).then(async classification => {
       try {
-        saveClassification({
+        await saveClassification({
           source_id: source.id,
           ...classification,
         });
@@ -113,7 +113,7 @@ export async function DELETE(request: NextRequest) {
     if (!id) {
       return NextResponse.json({ error: '需要 id 參數' }, { status: 400 });
     }
-    deleteSource(id);
+    await deleteSource(id);
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('DELETE /api/sources error:', error);

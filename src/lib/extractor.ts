@@ -21,7 +21,7 @@ export function detectPlatform(url: string): string {
   if (u.includes('tiktok.com')) return 'tiktok';
   if (u.includes('facebook.com') || u.includes('fb.watch')) return 'facebook';
   if (u.includes('reddit.com')) return 'reddit';
-  if (u.includes('threads.net')) return 'threads';
+  if (u.includes('threads.net') || u.includes('threads.com')) return 'threads';
   return 'web';
 }
 
