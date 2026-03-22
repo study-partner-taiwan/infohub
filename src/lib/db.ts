@@ -1,6 +1,10 @@
-import { kv } from '@vercel/kv';
+import { Redis } from '@upstash/redis';
 
-// 使用 Vercel KV (Redis) 作為雲端資料庫
+// 使用 Upstash Redis 作為雲端資料庫
+const kv = new Redis({
+  url: process.env.KV_REST_API_URL!,
+  token: process.env.KV_REST_API_TOKEN!,
+});
 // 資料結構：
 //   sources:{id} → Source object
 //   sources:list → sorted set (score = timestamp)

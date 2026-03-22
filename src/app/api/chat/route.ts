@@ -19,14 +19,14 @@ export async function POST(request: NextRequest) {
     let context = '';
 
     if (source_id) {
-      const source = getSourceById(source_id);
+      const source = await getSourceById(source_id);
       if (!source) {
         return NextResponse.json({ reply: 'Source not found.' }, { status: 404 });
       }
       context = buildSourceContext(source);
     } else {
       // Use all recent sources as context
-      const sources = getAllSources({ limit: 20 });
+      const sources = await getAllSources({ limit: 20 });
       if (sources.length === 0) {
         return NextResponse.json({ reply: 'No collected sources yet. Share some content first!' });
       }
@@ -90,7 +90,7 @@ Rules:
   }
 }
 
-function buildSourceContext(source: ReturnType<typeof getSourceById>, index?: number): string {
+function buildSourceContext(source: Awaited<ReturnType<typeof getSourceById>>, index?: number): string {
   if (!source) return '';
   const parts: string[] = [];
   if (index) parts.push(`[#${index}]`);
