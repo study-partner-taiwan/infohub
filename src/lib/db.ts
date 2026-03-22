@@ -1,15 +1,14 @@
-import { Redis } from '@upstash/redis';
+import { put, list, del } from '@vercel/blob';
 
-// 使用 Upstash Redis 作為雲端資料庫
-const kv = new Redis({
-  url: process.env.KV_REST_API_URL!,
-  token: process.env.KV_REST_API_TOKEN!,
-});
-// 資料結構：
-//   sources:{id} → Source object
-//   sources:list → sorted set (score = timestamp)
-//   classifications:{source_id} → Classification object
-//   categories:count → hash { category: count }
+// 使用 Vercel Blob 作為雲端資料庫
+// 將整個 DB 存成一個 JSON blob 檔案
+
+const DB_BLOB_NAME = 'infohub-db.json';
+
+interface DbSchema {
+  sources: Source[];
+  classifications: Classification[];
+}
 
 export interface Source {
   id: string;
@@ -61,6 +60,30 @@ function generateId(): string {
   return crypto.randomUUID();
 }
 
+async function readDb(): Promise<DbSchema> {
+  try {
+    const { blobs } = await list({ prefix: DB_BLOB_NAME });
+    if (blobs.length === 0) {
+      return { sources: [], classifications: [] };
+    }
+    const response = await fetch(blobs[0].url);
+    if (!response.ok) {
+      return { sources: [], classifications: [] };
+    }
+    return await response.json();
+  } catch (e) {
+    console.log('readDb error:', e);
+    return { sources: [], classifications: [] };
+  }
+}
+
+async function writeDb(data: DbSchema): Promise<void> {
+  await put(DB_BLOB_NAME, JSON.stringify(data), {
+    access: 'public',
+    addRandomSuffix: false,
+  });
+}
+
 export async function createSource(data: {
   type?: string;
   platform?: string;
@@ -72,6 +95,7 @@ export async function createSource(data: {
   thumbnail_url?: string;
   raw_metadata?: Record<string, unknown>;
 }): Promise<Source> {
+  const db = await readDb();
   const now = new Date().toISOString();
   const source: Source = {
     id: generateId(),
@@ -87,12 +111,8 @@ export async function createSource(data: {
     created_at: now,
     updated_at: now,
   };
-
-  // 儲存 source 物件
-  await kv.set(`sources:${source.id}`, source);
-  // 加入排序列表（用時間戳排序）
-  await kv.zadd('sources:list', { score: Date.now(), member: source.id });
-
+  db.sources.push(source);
+  await writeDb(db);
   return source;
 }
 
@@ -110,6 +130,8 @@ export async function saveClassification(data: {
   key_terms?: string[];
   main_arguments?: string[];
 }): Promise<Classification> {
+  const db = await readDb();
+  db.classifications = db.classifications.filter(c => c.source_id !== data.source_id);
   const classification: Classification = {
     id: generateId(),
     source_id: data.source_id,
@@ -126,9 +148,8 @@ export async function saveClassification(data: {
     main_arguments: data.main_arguments || [],
     classified_at: new Date().toISOString(),
   };
-
-  await kv.set(`classifications:${data.source_id}`, classification);
-
+  db.classifications.push(classification);
+  await writeDb(db);
   return classification;
 }
 
@@ -138,52 +159,29 @@ export async function getAllSources(options?: {
   limit?: number;
   offset?: number;
 }): Promise<SourceWithClassification[]> {
+  const db = await readDb();
   const { category, platform, limit = 50, offset = 0 } = options || {};
 
-  // 取得所有 source ID（按時間倒序）
-  const ids = await kv.zrange('sources:list', 0, -1, { rev: true }) as string[];
-
-  if (!ids || ids.length === 0) return [];
-
-  // 批次取得所有 sources
-  const pipeline = kv.pipeline();
-  for (const id of ids) {
-    pipeline.get(`sources:${id}`);
-  }
-  const sourcesRaw = await pipeline.exec();
-
-  // 批次取得所有 classifications
-  const clsPipeline = kv.pipeline();
-  for (const id of ids) {
-    clsPipeline.get(`classifications:${id}`);
-  }
-  const classificationsRaw = await clsPipeline.exec();
-
-  let results: SourceWithClassification[] = [];
-
-  for (let i = 0; i < ids.length; i++) {
-    const source = sourcesRaw[i] as Source | null;
-    if (!source) continue;
-
-    const cls = classificationsRaw[i] as Classification | null;
-
-    results.push({
-      ...source,
-      primary_category: cls?.primary_category || null,
-      subcategories: cls?.subcategories || [],
-      keywords: cls?.keywords || [],
-      tags: cls?.tags || [],
-      confidence: cls?.confidence || null,
-      summary: cls?.summary || null,
-      one_line: cls?.one_line || null,
-      key_points: cls?.key_points || [],
-      core_topics: cls?.core_topics || [],
-      key_terms: cls?.key_terms || [],
-      main_arguments: cls?.main_arguments || [],
+  let results: SourceWithClassification[] = db.sources
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    .map(source => {
+      const cls = db.classifications.find(c => c.source_id === source.id);
+      return {
+        ...source,
+        primary_category: cls?.primary_category || null,
+        subcategories: cls?.subcategories || [],
+        keywords: cls?.keywords || [],
+        tags: cls?.tags || [],
+        confidence: cls?.confidence || null,
+        summary: cls?.summary || null,
+        one_line: cls?.one_line || null,
+        key_points: cls?.key_points || [],
+        core_topics: cls?.core_topics || [],
+        key_terms: cls?.key_terms || [],
+        main_arguments: cls?.main_arguments || [],
+      };
     });
-  }
 
-  // 篩選
   if (category && category !== 'all') {
     results = results.filter(s => s.primary_category === category);
   }
@@ -195,11 +193,10 @@ export async function getAllSources(options?: {
 }
 
 export async function getSourceById(id: string): Promise<SourceWithClassification | undefined> {
-  const source = await kv.get<Source>(`sources:${id}`);
+  const db = await readDb();
+  const source = db.sources.find(s => s.id === id);
   if (!source) return undefined;
-
-  const cls = await kv.get<Classification>(`classifications:${id}`);
-
+  const cls = db.classifications.find(c => c.source_id === id);
   return {
     ...source,
     primary_category: cls?.primary_category || null,
@@ -217,61 +214,29 @@ export async function getSourceById(id: string): Promise<SourceWithClassificatio
 }
 
 export async function deleteSource(id: string): Promise<void> {
-  await kv.del(`sources:${id}`);
-  await kv.del(`classifications:${id}`);
-  await kv.zrem('sources:list', id);
+  const db = await readDb();
+  db.sources = db.sources.filter(s => s.id !== id);
+  db.classifications = db.classifications.filter(c => c.source_id !== id);
+  await writeDb(db);
 }
 
 export async function getCategories(): Promise<{ category: string; count: number }[]> {
-  // 遍歷所有 classifications 統計分類
-  const ids = await kv.zrange('sources:list', 0, -1) as string[];
-  if (!ids || ids.length === 0) return [];
-
-  const pipeline = kv.pipeline();
-  for (const id of ids) {
-    pipeline.get(`classifications:${id}`);
-  }
-  const results = await pipeline.exec();
-
+  const db = await readDb();
   const counts: Record<string, number> = {};
-  for (const cls of results) {
-    if (cls && (cls as Classification).primary_category) {
-      const cat = (cls as Classification).primary_category;
-      counts[cat] = (counts[cat] || 0) + 1;
-    }
+  for (const c of db.classifications) {
+    counts[c.primary_category] = (counts[c.primary_category] || 0) + 1;
   }
-
   return Object.entries(counts)
     .map(([category, count]) => ({ category, count }))
     .sort((a, b) => b.count - a.count);
 }
 
 export async function getStats(): Promise<{ total: number; classified: number; categories: number }> {
-  const totalCount = await kv.zcard('sources:list');
-
-  const ids = await kv.zrange('sources:list', 0, -1) as string[];
-  if (!ids || ids.length === 0) {
-    return { total: 0, classified: 0, categories: 0 };
-  }
-
-  const pipeline = kv.pipeline();
-  for (const id of ids) {
-    pipeline.get(`classifications:${id}`);
-  }
-  const results = await pipeline.exec();
-
-  let classified = 0;
-  const categorySet = new Set<string>();
-  for (const cls of results) {
-    if (cls && (cls as Classification).primary_category) {
-      classified++;
-      categorySet.add((cls as Classification).primary_category);
-    }
-  }
-
+  const db = await readDb();
+  const categories = new Set(db.classifications.map(c => c.primary_category));
   return {
-    total: totalCount || 0,
-    classified,
-    categories: categorySet.size,
+    total: db.sources.length,
+    classified: db.classifications.length,
+    categories: categories.size,
   };
 }
