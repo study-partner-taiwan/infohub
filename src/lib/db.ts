@@ -1,4 +1,4 @@
-import { put, list, del } from '@vercel/blob';
+import { put, list, del, getDownloadUrl } from '@vercel/blob';
 
 // 使用 Vercel Blob 作為雲端資料庫
 // 將整個 DB 存成一個 JSON blob 檔案
@@ -66,8 +66,10 @@ async function readDb(): Promise<DbSchema> {
     if (blobs.length === 0) {
       return { sources: [], classifications: [] };
     }
-    const response = await fetch(blobs[0].url);
+    const downloadUrl = getDownloadUrl(blobs[0].url);
+    const response = await fetch(downloadUrl);
     if (!response.ok) {
+      console.log('readDb fetch failed:', response.status, response.statusText);
       return { sources: [], classifications: [] };
     }
     return await response.json();
