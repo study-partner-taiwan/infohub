@@ -79,7 +79,7 @@ async function readDb(): Promise<DbSchema> {
 
 async function writeDb(data: DbSchema): Promise<void> {
   await put(DB_BLOB_NAME, JSON.stringify(data), {
-    access: 'public',
+    access: 'private',
     addRandomSuffix: false,
   });
 }
