@@ -81,6 +81,7 @@ async function writeDb(data: DbSchema): Promise<void> {
   await put(DB_BLOB_NAME, JSON.stringify(data), {
     access: 'private',
     addRandomSuffix: false,
+    allowOverwrite: true,
   });
 }
 
