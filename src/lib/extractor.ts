@@ -39,11 +39,14 @@ export function detectContentType(url: string, platform: string): string {
     return 'video';
   }
   if (platform === 'tiktok') return 'video';
+  if (platform === 'threads') return 'post';
   return 'article';
 }
 
 // 從 URL 擷取內容（使用 oEmbed 或 OpenGraph）
-export async function extractFromUrl(url: string): Promise<ExtractedContent> {
+export async function extractFromUrl(inputUrl: string): Promise<ExtractedContent> {
+  // 短連結（例如 threads.com/share/xxx）先解析成真正的貼文網址
+  const url = await resolveShareUrl(inputUrl);
   const platform = detectPlatform(url);
   const type = detectContentType(url, platform);
 
@@ -107,6 +110,51 @@ export async function extractFromUrl(url: string): Promise<ExtractedContent> {
   return baseResult;
 }
 
+// 解析 Threads 分享短連結：threads.com/share/CODE → threads.com/@user/post/CODE
+// 解析失敗時回傳原網址，不影響後續流程
+export async function resolveShareUrl(url: string): Promise<string> {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    const isThreads = host.endsWith('threads.com') || host.endsWith('threads.net');
+    if (!isThreads || !parsed.pathname.startsWith('/share/')) return url;
+
+    const res = await fetch(url, {
+      method: 'GET',
+      redirect: 'follow',
+      signal: AbortSignal.timeout(8000),
+      headers: { 'User-Agent': THREADS_UA, 'Accept': 'text/html' },
+    });
+    if (res.url && res.url !== url && !new URL(res.url).pathname.startsWith('/share/')) {
+      return stripTracking(res.url);
+    }
+
+    // 沒有 HTTP 轉址時，從頁面的 canonical / og:url 取得真正網址
+    const html = await res.text();
+    const canonical =
+      extractMetaTag(html, 'og:url') ||
+      (html.match(/<link[^>]*rel=["']canonical["'][^>]*href=["']([^"']+)["']/i)?.[1] ?? null);
+    if (canonical && /\/@[^/]+\/post\//.test(canonical)) return stripTracking(canonical);
+    return url;
+  } catch {
+    return url;
+  }
+}
+
+function stripTracking(url: string): string {
+  try {
+    const u = new URL(url);
+    u.search = '';
+    u.hash = '';
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
+// Meta 系網站（Threads）對一般爬蟲常回傳登入牆，用 Meta 自家的預覽爬蟲 UA 才拿得到 OG 資料
+const THREADS_UA = 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)';
+
 // oEmbed 擷取
 async function fetchOEmbed(url: string, platform: string): Promise<Record<string, string> | null> {
   const oembedEndpoints: Record<string, string> = {
@@ -134,7 +182,7 @@ async function fetchOpenGraph(url: string): Promise<{ title?: string; descriptio
     const res = await fetch(url, {
       signal: AbortSignal.timeout(8000),
       headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; InfoHub/1.0)',
+        'User-Agent': detectPlatform(url) === 'threads' ? THREADS_UA : 'Mozilla/5.0 (compatible; InfoHub/1.0)',
         'Accept': 'text/html',
       },
     });
@@ -233,6 +281,16 @@ function parseUrlInfo(url: string, platform: string): { title: string | null; au
       return {
         title: `Tweet by @${author}`,
         author: author ? `@${author}` : null,
+      };
+    }
+
+    if (platform === 'threads') {
+      // threads.com/@username/post/CODE
+      const parts = parsed.pathname.split('/').filter(Boolean);
+      const handle = parts[0]?.startsWith('@') ? parts[0].slice(1) : null;
+      return {
+        title: handle ? `Threads 貼文 by @${handle}` : 'Threads 貼文',
+        author: handle ? `@${handle}` : null,
       };
     }
 

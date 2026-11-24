@@ -64,7 +64,7 @@ export async function POST(request: NextRequest) {
       type: extracted.type,
       platform: extracted.platform,
       title: inputTitle || extracted.title || undefined,
-      url: targetUrl,
+      url: extracted.url,
       author: extracted.author || undefined,
       description: extracted.description || extraDescription || undefined,
       content_text: extracted.content_text || extraDescription || undefined,
